@@ -166,9 +166,13 @@ const startMoving = () => {
   }, interval)
 }
 
-// 检查位置是否在合法的CSS坐标范围内（菱形区域）
+// 检查位置是否在合法的CSS坐标范围内（根据画布大小动态计算）
 const isInLegalRange = (row, col) => {
   if (!sprite.value) return false
+  
+  // 获取画布大小倍数
+  const canvasMultiplier = mapStore.canvasSizeMultiplier || 1
+  const ntiles = mapStore.ntiles
   
   // 计算等轴测坐标
   const tileX = (col - row) * (mapConfig.tileWidth / 2)
@@ -177,19 +181,27 @@ const isInLegalRange = (row, col) => {
   // 计算精灵的实际Y坐标
   const spriteY = tileY + mapConfig.tileHeight * 0.6 - sprite.value.config.size.height * 0.8
   
-  // 菱形的中心坐标
-  const centerLeft = 64
-  const centerTop = 289.03
+  // 根据画布大小动态计算菱形区域
+  // 地图的实际尺寸
+  const mapWidth = ntiles * mapConfig.tileWidth
+  const mapHeight = ntiles * mapConfig.tileHeight * 2 / 3.1
   
-  // 菱形的半轴长度
-  const halfWidth = 448 // 横向半轴
-  const halfHeight = 289.03 // 纵向半轴
+  // 菱形的中心坐标（地图中心）
+  const centerLeft = mapWidth / 2
+  const centerTop = mapHeight / 2
+  
+  // 菱形的半轴长度（根据画布大小扩展）
+  const halfWidth = mapWidth * 0.6  // 横向半轴，覆盖60%的地图宽度
+  const halfHeight = mapHeight * 0.6  // 纵向半轴，覆盖60%的地图高度
   
   // 检查点是否在菱形内：|(x - centerLeft)/halfWidth| + |(y - centerTop)/halfHeight| <= 1
   const normalizedX = Math.abs((tileX - centerLeft) / halfWidth)
   const normalizedY = Math.abs((spriteY - centerTop) / halfHeight)
   
-  return normalizedX + normalizedY <= 1
+  // 对于大画布，放宽限制，允许更大的活动范围
+  const threshold = canvasMultiplier >= 4 ? 1.5 : 1.0
+  
+  return normalizedX + normalizedY <= threshold
 }
 
 // 随机移动
@@ -200,19 +212,40 @@ const moveRandomly = () => {
   const currentX = sprite.value.currentRow
   const currentY = sprite.value.currentCol
   
-  // 可能的移动方向（上下左右）
+  // 获取画布大小倍数
+  const canvasMultiplier = mapStore.canvasSizeMultiplier || 1
+  const ntiles = mapStore.ntiles
+  
+  // 可能的移动方向（上下左右，以及对角线方向，让移动更灵活）
   const directions = [
-    { x: -1, y: 0 }, // 上
-    { x: 1, y: 0 },  // 下
-    { x: 0, y: -1 }, // 左
-    { x: 0, y: 1 }   // 右
+    { x: -1, y: 0 },  // 上
+    { x: 1, y: 0 },   // 下
+    { x: 0, y: -1 },  // 左
+    { x: 0, y: 1 },   // 右
+    { x: -0.7, y: -0.7 }, // 左上
+    { x: -0.7, y: 0.7 },  // 右上
+    { x: 0.7, y: -0.7 },  // 左下
+    { x: 0.7, y: 0.7 }    // 右下
   ]
   
   // 随机打乱方向顺序
   const shuffledDirections = [...directions].sort(() => Math.random() - 0.5)
   
-  // 随机步长（0.3-0.8个瓦片单位），使移动更自然
-  const step = 0.3 + Math.random() * 0.5
+  // 缩短移动步长，让移动更自然，减少漂移感
+  // 基础步长：0.2-0.6个瓦片单位（缩短）
+  // 大画布时稍微增加步长，但不要太多：2x=0.3-0.8, 4x=0.4-1.0, 8x=0.5-1.2
+  const baseStep = 0.2 + Math.random() * 0.4
+  // 根据画布大小轻微调整，但不要成倍增加
+  let step = baseStep * (1 + (canvasMultiplier - 1) * 0.2) // 每增加一倍画布，步长只增加20%
+  
+  // 偶尔进行中等距离移动（5%概率），但步长不会太大
+  if (Math.random() < 0.05 && canvasMultiplier >= 2) {
+    step = step * (1.5 + Math.random() * 0.5) // 中等距离移动：1.5-2倍步长（缩短）
+  }
+  
+  // 限制最大步长，避免移动太远
+  const maxStep = Math.min(ntiles * 0.15, 3) // 最多移动地图15%的距离，但不超过3个瓦片（缩短）
+  step = Math.min(step, maxStep)
   
   // 寻找有效的移动位置
   for (const dir of shuffledDirections) {
@@ -225,16 +258,20 @@ const moveRandomly = () => {
     const tileY = Math.floor(newY)
     
     // 检查边界：确保新位置在地图瓦片范围内（0 <= x < ntiles, 0 <= y < ntiles）
-    // 并且在合法的CSS坐标范围内
-    if (newX >= 0 && newX < mapConfig.ntiles && newY >= 0 && newY < mapConfig.ntiles) {
+    if (newX >= 0 && newX < ntiles && newY >= 0 && newY < ntiles) {
       // 检查目标瓦片是否有效
-      if (isValidPosition(tileX, tileY) && isInLegalRange(newX, newY)) {
-        // 使用Store方法设置目标位置
-        spriteStore.setSpriteTargetPosition(props.id, newX, newY)
-        
-        // 开始移动动画
-        animateMove()
-        break
+      if (isValidPosition(tileX, tileY)) {
+        // 对于大画布，放宽isInLegalRange的限制，允许更大的活动范围
+        // 或者直接移除这个限制，让精灵可以在整个地图上移动
+        const shouldCheckRange = canvasMultiplier === 1
+        if (!shouldCheckRange || isInLegalRange(newX, newY)) {
+          // 使用Store方法设置目标位置
+          spriteStore.setSpriteTargetPosition(props.id, newX, newY)
+          
+          // 开始移动动画
+          animateMove()
+          break
+        }
       }
     }
   }
@@ -263,7 +300,12 @@ const animateMove = () => {
   const targetRow = sprite.value.targetRow
   const targetCol = sprite.value.targetCol
   
-  const duration = 1000 // 移动动画持续时间（毫秒）
+  // 根据移动距离计算动画持续时间，让移动更自然
+  const distance = Math.sqrt(
+    Math.pow(targetRow - startRow, 2) + Math.pow(targetCol - startCol, 2)
+  )
+  // 基础持续时间：800ms，根据距离调整（每0.5个瓦片单位增加100ms）
+  const duration = 800 + distance * 200
   const startTime = Date.now()
   
   const moveStep = () => {

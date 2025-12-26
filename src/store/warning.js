@@ -19,8 +19,9 @@ export const useWarningStore = defineStore('warning', {
     isPanelOpen: false,
     
     // 配置
-    autoUpdateInterval: 30000, // 30秒自动更新
+    autoUpdateInterval: 60000, // 60秒（1分钟）自动更新
     updateTimer: null,
+    hasNewAnalysis: false, // 是否有新的分析结果
   }),
 
   getters: {
@@ -75,6 +76,13 @@ export const useWarningStore = defineStore('warning', {
       try {
         const result = await getCityWarning(statsData)
         
+        // 检查是否有旧数据（通过比较时间戳和内容）
+        const hadPreviousData = this.lastUpdate !== null && 
+                                (this.warnings.length > 0 || this.suggestions.length > 0)
+        
+        // 保存旧的时间戳用于比较
+        const previousUpdate = this.lastUpdate
+        
         this.warnings = result.warnings || []
         this.suggestions = result.suggestions || []
         this.summary = result.summary || ''
@@ -83,6 +91,12 @@ export const useWarningStore = defineStore('warning', {
         this.dataSnapshot = result.dataSnapshot || {}
         this.lastUpdate = new Date().toISOString()
         this.apiAvailable = true
+        
+        // 如果有旧数据且时间戳已更新，标记为有新分析结果
+        if (hadPreviousData && previousUpdate !== this.lastUpdate) {
+          this.hasNewAnalysis = true
+          console.log('📊 新的分析结果已生成，显示通知')
+        }
 
         return result
       } catch (error) {
@@ -203,6 +217,8 @@ export const useWarningStore = defineStore('warning', {
      */
     openPanel() {
       this.isPanelOpen = true
+      // 打开面板后清除新分析标记
+      this.hasNewAnalysis = false
     },
 
     /**

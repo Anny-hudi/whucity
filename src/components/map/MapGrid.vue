@@ -97,9 +97,56 @@
       <button @click="handleImportMap" class="control-btn" title="导入地图">
         <span class="control-icon mdi mdi-upload"></span>
       </button>
+      <button @click="handleImportDefaultLayout" class="control-btn" title="导入默认布局" :disabled="![1, 2, 4, 8].includes(mapStore.canvasSizeMultiplier)">
+        <span class="control-icon mdi mdi-map"></span>
+      </button>
       <button @click="debugFlag = !debugFlag" class="control-btn" title="调试模式">
         <span class="control-icon mdi mdi-bug"></span>
       </button>
+    </div>
+    
+    <!-- 画布大小选择器 -->
+    <div class="canvas-size-selector">
+      <div class="selector-label">画布大小</div>
+      <div class="selector-buttons">
+        <button 
+          v-for="multiplier in [1, 2, 4, 8]" 
+          :key="multiplier"
+          @click="handleCanvasSizeChange(multiplier)"
+          :class="['size-btn', { active: mapStore.canvasSizeMultiplier === multiplier }]"
+          :title="`${multiplier}x (${mapConfig.ntiles * multiplier}×${mapConfig.ntiles * multiplier})`"
+        >
+          {{ multiplier }}x
+        </button>
+      </div>
+    </div>
+    
+    <!-- 填充模式选择器 -->
+    <div class="fill-mode-selector">
+      <div class="selector-label">填充模式</div>
+      <div class="selector-buttons">
+        <button 
+          @click="mapStore.setFillMode('single')"
+          :class="['mode-btn', { active: mapStore.fillMode === 'single' }]"
+          title="单个元素块"
+        >
+          <span class="mdi mdi-cursor-pointer"></span>
+        </button>
+        <button 
+          @click="mapStore.setFillMode('row')"
+          :class="['mode-btn', { active: mapStore.fillMode === 'row' }]"
+          title="整行填充"
+        >
+          <span class="mdi mdi-arrow-right"></span>
+        </button>
+        <button 
+          @click="mapStore.setFillMode('column')"
+          :class="['mode-btn', { active: mapStore.fillMode === 'column' }]"
+          title="整列填充"
+        >
+          <span class="mdi mdi-arrow-down"></span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -219,7 +266,8 @@ const virtualTileImageStyle = computed(() => {
 // INFO 瓦片点击事件
 const handleTileClick = () => {
   const { x, y } = hoveredTile.value
-  if (x >= 0 && x < mapConfig.ntiles && y >= 0 && y < mapConfig.ntiles) {
+  const ntiles = mapStore.ntiles
+  if (x >= 0 && x < ntiles && y >= 0 && y < ntiles) {
     // 如果有选中的瓦片，将其放置到地图上
     if (mapStore.selectedTileId) {
       // 获取选中瓦片的数据
@@ -228,8 +276,17 @@ const handleTileClick = () => {
         // 保存当前状态到历史记录
         mapStore.saveToHistory()
         
-        // 更新地图瓦片
-        mapStore.updateTile(x, y, mapStore.selectedTileId, 1)
+        // 根据填充模式进行填充
+        if (mapStore.fillMode === 'row') {
+          // 整行填充
+          mapStore.fillRow(x, mapStore.selectedTileId, 1)
+        } else if (mapStore.fillMode === 'column') {
+          // 整列填充
+          mapStore.fillColumn(y, mapStore.selectedTileId, 1)
+        } else {
+          // 单个元素块填充（默认）
+          mapStore.updateTile(x, y, mapStore.selectedTileId, 1)
+        }
       }
     }
   }
@@ -249,7 +306,8 @@ const handleTileMouseLeave = () => {
 // 瓦片双击事件处理
 const handleTileDoubleClick = () => {
   const { x, y } = hoveredTile.value
-  if (x >= 0 && x < mapConfig.ntiles && y >= 0 && y < mapConfig.ntiles) {
+  const ntiles = mapStore.ntiles
+  if (x >= 0 && x < ntiles && y >= 0 && y < ntiles) {
     // 获取当前瓦片的id
     const currentTileId = mapStore.isoMap[x][y][0]
     
@@ -300,8 +358,20 @@ const handleMouseUp = () => {
 // 滚轮缩放
 const handleWheel = (e) => {
   e.preventDefault()
-  const delta = e.deltaY > 0 ? -mapConfig.zoomStep : mapConfig.zoomStep
-  const newZoom = Math.max(mapConfig.minZoom, Math.min(mapConfig.maxZoom, mapStore.zoom + delta))
+  
+  // 根据画布大小调整缩放步长，大画布时使用更小的步长以便精细控制
+  const baseStep = mapConfig.zoomStep
+  const multiplier = mapStore.canvasSizeMultiplier
+  // 大画布时缩小步长，但不要太小
+  const adjustedStep = baseStep / Math.max(1, multiplier * 0.5)
+  
+  const delta = e.deltaY > 0 ? -adjustedStep : adjustedStep
+  const minZoom = mapStore.minZoom
+  const maxZoom = mapStore.maxZoom
+  const newZoom = Math.max(minZoom, Math.min(maxZoom, mapStore.zoom + delta))
+  
+  // 如果缩放没有变化，直接返回
+  if (newZoom === mapStore.zoom) return
   
   // 计算缩放中心点
   const rect = mapContainer.value.getBoundingClientRect()
@@ -408,6 +478,41 @@ const handleImportMap = () => {
   input.click()
 }
 
+// 处理画布大小变化
+const handleCanvasSizeChange = (multiplier) => {
+  if (mapStore.canvasSizeMultiplier !== multiplier) {
+    // 弹出确认对话框
+    if (confirm(`确定要切换画布大小为 ${multiplier}x 吗？\n当前地图数据将被保留并居中放置，视图将自动调整以适应新画布。`)) {
+      // setCanvasSizeMultiplier 内部已经处理了缩放和视图调整
+      mapStore.setCanvasSizeMultiplier(multiplier)
+      // 等待地图更新完成后再重新初始化精灵
+      nextTick(() => {
+        // 重新初始化精灵以适应新的画布大小
+        initSprites()
+      })
+    }
+  }
+}
+
+// 处理导入默认布局
+const handleImportDefaultLayout = () => {
+  // 检查当前画布大小是否支持默认布局
+  if (![1, 2, 4, 8].includes(mapStore.canvasSizeMultiplier)) {
+    alert('当前画布大小不支持默认布局')
+    return
+  }
+  
+  // 弹出确认对话框
+  if (confirm(`确定要导入 ${mapStore.canvasSizeMultiplier}x 画布的默认布局吗？\n这将覆盖当前地图数据，且无法撤销。`)) {
+    const success = mapStore.importDefaultLayout()
+    if (success) {
+      alert('默认布局导入成功！')
+    } else {
+      alert('默认布局导入失败，请检查画布大小')
+    }
+  }
+}
+
 // 事件监听
 onMounted(() => {
   window.addEventListener('mousemove', handleMouseMove)
@@ -423,11 +528,21 @@ onMounted(() => {
   mapStore.initMapData()
   mapStore.loadTextures()
   
-  // 初始化精灵
-  initSprites()
+  // 如果画布大小不是默认值，且缩放还是默认值1，自动调整缩放以适应画布
+  if (mapStore.canvasSizeMultiplier !== 1 && mapStore.zoom === 1) {
+    const fitZoom = mapStore.calculateFitZoom()
+    mapStore.zoom = fitZoom
+    mapStore.saveState()
+  }
   
-  // 启动随机精灵生成
-  startRandomSpriteGeneration()
+  // 等待地图完全初始化后再初始化精灵，确保能获取到完整的地图尺寸
+  nextTick(() => {
+    // 初始化精灵
+    initSprites()
+    
+    // 启动随机精灵生成
+    startRandomSpriteGeneration()
+  })
 })
 
 onUnmounted(() => {
@@ -449,9 +564,30 @@ const initSprites = () => {
   // 清除现有的精灵
   spriteStore.clearAllSprites()
   
-  // 添加基础精灵（猫）
-  spriteStore.addSprite('cat')
-  spriteStore.addSprite('people')
+  // 根据画布大小添加基础精灵
+  const multiplier = mapStore.canvasSizeMultiplier || 1
+  
+  // 基础精灵数量：1x=1个，2x=2个，4x=4个，8x=8个
+  const baseCount = multiplier
+  
+  // 添加猫
+  for (let i = 0; i < baseCount; i++) {
+    spriteStore.addSprite('cat')
+  }
+  
+  // 添加人物（数量是猫的1.5倍，向上取整）
+  const peopleCount = Math.ceil(baseCount * 1.5)
+  for (let i = 0; i < peopleCount; i++) {
+    spriteStore.addSprite('people')
+  }
+  
+  // 如果画布较大（4x或8x），也添加一些狐狸
+  if (multiplier >= 4) {
+    const foxCount = Math.floor(multiplier / 2)
+    for (let i = 0; i < foxCount; i++) {
+      spriteStore.addSprite('fox')
+    }
+  }
 }
 
 </script>
@@ -542,6 +678,97 @@ const initSprites = () => {
   border-radius: 5px;
   font-size: 8px;
   padding: 2px 5px;
+}
+
+.canvas-size-selector {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background-color: white;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  min-width: 140px;
+}
+
+.fill-mode-selector {
+  position: absolute;
+  top: 120px;
+  right: 20px;
+  background-color: white;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  min-width: 140px;
+}
+
+.selector-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.selector-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.size-btn {
+  flex: 1;
+  min-width: 50px;
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f5f5f5;
+  color: #333;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.size-btn:hover {
+  background-color: #e0e0e0;
+  transform: translateY(-1px);
+}
+
+.size-btn.active {
+  background-color: #4caf50;
+  color: white;
+  border-color: #4caf50;
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+}
+
+.mode-btn {
+  flex: 1;
+  min-width: 40px;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f5f5f5;
+  color: #333;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mode-btn:hover {
+  background-color: #e0e0e0;
+  transform: translateY(-1px);
+}
+
+.mode-btn.active {
+  background-color: #2196f3;
+  color: white;
+  border-color: #2196f3;
+  box-shadow: 0 2px 4px rgba(33, 150, 243, 0.3);
 }
 
 </style>

@@ -2,14 +2,14 @@
   <!-- 悬浮按钮 -->
   <div 
     class="warning-float-button" 
-    :class="{ 'has-warnings': hasCriticalWarnings }"
+    :class="{ 'has-warnings': hasCriticalWarnings || hasNewAnalysis }"
     :style="{ left: buttonPosition.x + 'px', top: buttonPosition.y + 'px' }"
     ref="buttonRef"
     @mousedown="startButtonDrag"
     @click.stop="handleButtonClick"
   >
     <i class="mdi mdi-alert-circle"></i>
-    <span v-if="warningCount > 0" class="warning-badge">{{ warningCount }}</span>
+    <span v-if="warningCount > 0 || hasNewAnalysis" class="warning-badge">{{ hasNewAnalysis ? 1 : warningCount }}</span>
   </div>
 
   <!-- 悬浮窗面板 -->
@@ -159,17 +159,17 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useWarningStore } from '../../store/warning'
-import { useSeemoreStore } from '../../store/seemore'
 
 const warningStore = useWarningStore()
-const seemoreStore = useSeemoreStore()
 
 const panelRef = ref(null)
 const buttonRef = ref(null)
 const isDragging = ref(false)
 const isButtonDragging = ref(false)
+const hasButtonMoved = ref(false) // 标记按钮是否真的移动了
 const dragOffset = ref({ x: 0, y: 0 })
 const buttonDragOffset = ref({ x: 0, y: 0 })
+const buttonStartPosition = ref({ x: 0, y: 0 }) // 记录拖动开始时的位置
 const panelPosition = ref({ x: window.innerWidth - 430, y: window.innerHeight - 700 })
 const buttonPosition = ref({ x: window.innerWidth - 90, y: window.innerHeight - 180 })
 
@@ -182,20 +182,29 @@ const nextSteps = computed(() => warningStore.nextSteps)
 const lastUpdate = computed(() => warningStore.lastUpdate)
 const hasCriticalWarnings = computed(() => warningStore.hasCriticalWarnings)
 const warningCount = computed(() => {
+  // 如果有新分析结果，显示1，否则显示预警数量
+  if (warningStore.hasNewAnalysis) {
+    return 1
+  }
   return warningStore.warningsByLevel.critical.length + warningStore.warningsByLevel.high.length
 })
+const hasNewAnalysis = computed(() => warningStore.hasNewAnalysis)
 
 const togglePanel = () => {
   warningStore.togglePanel()
 }
 
 const handleButtonClick = (e) => {
-  // 如果正在拖动，不触发点击
-  if (isButtonDragging.value) {
+  // 如果按钮真的移动了（拖动），不触发点击
+  if (hasButtonMoved.value) {
+    hasButtonMoved.value = false
     return
   }
-  // 打开 SEEMORE AI 分析面板
-  seemoreStore.openPanel()
+  
+  console.log('🔵 点击悬浮窗按钮，打开预警面板')
+  // 打开预警面板（显示已分析好的报告）
+  warningStore.openPanel()
+  console.log('✅ 面板状态:', warningStore.isPanelOpen)
 }
 
 const closePanel = () => {
@@ -288,6 +297,9 @@ const startButtonDrag = (e) => {
   }
   
   isButtonDragging.value = true
+  hasButtonMoved.value = false // 重置移动标记
+  buttonStartPosition.value = { x: e.clientX, y: e.clientY } // 记录起始位置
+  
   if (buttonRef.value) {
     const rect = buttonRef.value.getBoundingClientRect()
     buttonDragOffset.value = {
@@ -305,6 +317,14 @@ const startButtonDrag = (e) => {
 const onButtonDrag = (e) => {
   if (!isButtonDragging.value) return
   
+  // 检查是否真的移动了（超过5像素才认为是拖动）
+  const deltaX = Math.abs(e.clientX - buttonStartPosition.value.x)
+  const deltaY = Math.abs(e.clientY - buttonStartPosition.value.y)
+  
+  if (deltaX > 5 || deltaY > 5) {
+    hasButtonMoved.value = true // 标记为真的移动了
+  }
+  
   const newX = e.clientX - buttonDragOffset.value.x
   const newY = e.clientY - buttonDragOffset.value.y
   
@@ -321,12 +341,16 @@ const onButtonDrag = (e) => {
 }
 
 const stopButtonDrag = () => {
-  // 延迟重置，避免触发点击事件
-  setTimeout(() => {
-    isButtonDragging.value = false
-  }, 100)
+  isButtonDragging.value = false
   document.removeEventListener('mousemove', onButtonDrag)
   document.removeEventListener('mouseup', stopButtonDrag)
+  
+  // 如果确实移动了，延迟重置移动标记，避免触发点击
+  if (hasButtonMoved.value) {
+    setTimeout(() => {
+      hasButtonMoved.value = false
+    }, 50)
+  }
 }
 
 onMounted(() => {
